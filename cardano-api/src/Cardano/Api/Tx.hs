@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -21,6 +22,7 @@ module Cardano.Api.Tx (
     -- | Creating transaction witnesses one by one, or all in one go.
     Tx(.., Tx),
     getTxBody,
+    getTxHash,
     getTxWitnesses,
     ScriptValidity(..),
 
@@ -58,6 +60,7 @@ import           Data.Functor.Identity (Identity)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Vector as Vector
+import           GHC.Records (HasField (..))
 --
 -- Common types, consensus, network
 --
@@ -69,6 +72,7 @@ import qualified Cardano.Prelude as CBOR (cborError)
 -- Crypto API used by consensus and Shelley (and should be used by Byron)
 --
 import qualified Cardano.Crypto.DSIGN.Class as Crypto
+import qualified Cardano.Crypto.Hash.Class as Crypto
 import qualified Cardano.Crypto.Util as Crypto
 import qualified Cardano.Crypto.Wallet as Crypto.HD
 
@@ -246,6 +250,31 @@ instance IsCardanoEra era => HasTextEnvelope (Tx era) where
         MaryEra    -> "Tx MaryEra"
         AlonzoEra  -> "Tx AlonzoEra"
 
+
+getTxHash :: Tx era -> ByteString
+getTxHash (ByronTx Byron.ATxAux { Byron.aTaTx = txbody }) =
+  Byron.hashToBytes $ Byron.hashDecoded txbody
+getTxHash (ShelleyTx era tx) =
+  obtainTxHashConstraints era $ getShelleyTxHash tx
+ where
+  getShelleyTxHash tx' =
+    let annotatedHash = Ledger.hashAnnotated $ getField @"body" tx'
+        txBodyHash = Ledger.extractHash  annotatedHash
+    in Crypto.hashToBytes txBodyHash
+
+  obtainTxHashConstraints
+    :: ShelleyLedgerEra era ~ ledgerera
+    => ShelleyBasedEra era
+    -> ( ( HasField "body" (Ledger.Tx ledgerera) (Ledger.TxBody ledgerera)
+         , Ledger.HashAnnotated (Ledger.TxBody ledgerera)
+                                 Ledger.EraIndependentTxBody StandardCrypto
+         ) => a
+       )
+    -> a
+  obtainTxHashConstraints ShelleyBasedEraShelley f = f
+  obtainTxHashConstraints ShelleyBasedEraAllegra f = f
+  obtainTxHashConstraints ShelleyBasedEraMary f = f
+  obtainTxHashConstraints ShelleyBasedEraAlonzo f = f
 
 data KeyWitness era where
 
